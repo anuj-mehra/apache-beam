@@ -16,6 +16,7 @@ public class WordCount {
     public static void main(String[] args) {
 
         PipelineOptions options = PipelineOptionsFactory.create();
+        //PipelineOptions options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
         Pipeline p = Pipeline.create(options);
 
         PCollection<KV<String, Long>> wordCount = p

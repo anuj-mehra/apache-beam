@@ -6,19 +6,18 @@ import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.io.parquet.ParquetIO;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.SimpleFunction;
+import org.apache.beam.sdk.values.PCollection;
 
-public class TextToParquet {
+public class TextToParquet2 {
 
     public static void main(String[] args) {
         PipelineOptions options = PipelineOptionsFactory.create();
         Pipeline p = Pipeline.create(options);
-       // final Pipeline p = Pipeline.create();
 
         // Read a text file
-        final PCollection<String> lines = p.apply("ReadTextFile", TextIO.read().from("input.txt"));
+        final PCollection<String> lines = p.apply("ReadTextFile", TextIO.read().from("/Users/anujmehra/git/apache-beam/src/main/resources/input.txt"));
 
         // Convert to a Parquet-compatible format (just an example of how you might transform the data)
         final PCollection<MyParquetType> parquetData = lines.apply(
@@ -29,8 +28,6 @@ public class TextToParquet {
                         return new MyParquetType(input);
                     }
                 }));
-
-        parquetData.getName();
 
         // Write to Parquet
         //parquetData.apply("WriteParquetFile", ParquetIO.sink(MyParquetType.class).to("output.parquet"));

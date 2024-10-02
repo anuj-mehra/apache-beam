@@ -1,0 +1,23 @@
+job_metadata:
+  process_name: tokyo-cash-tran-processor
+  steps:
+    - domain: extract
+      dataframeName: inputTranData
+      extractType: textFile
+      sourceFileName: tokyo-cash-tran.txt
+      columnsToBeRead: all
+
+    - domain: extract
+      dataframeName: tranRefData
+      extractType: textFile
+      sourceFileName: tokyo-cash-tran-ref.txt
+      columnsToBeRead: all
+
+    - domain: transform
+      dataframesInvolved: inputTranData,tranRefData
+      dataframeName: mergedDf
+      sqlQuery: select * from df1
+
+    - domain: load
+      dataframeName: mergedDf
+      destinationFileName: tokyo-cash-tran-output.txt
