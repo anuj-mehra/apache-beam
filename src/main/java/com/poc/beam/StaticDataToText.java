@@ -19,7 +19,7 @@ public class StaticDataToText {
         final List<String> input = Arrays.asList("first", "second", "third", "fourth", "fifth");
 
         final PCollection<String> pCollection = p.apply(Create.of(input));
-        pCollection.apply(TextIO.write().to("/Users/anujmehra/git/apache-beam/src/main/resources/StaticDataToText/part-file").withSuffix(".txt"));
+        pCollection.apply(TextIO.write().to("/Users/anujmehra/git/apache-beam/src/main/resources/StaticDataToText/part-file/").withSuffix(".txt"));
 
         p.run().waitUntilFinish();
     }
