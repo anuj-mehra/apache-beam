@@ -1,0 +1,73 @@
+
+
+from airflow import DAG
+from airflow.sensors.filesystem import FileSensor
+from airflow.operators.python import PythonOperator
+from datetime import datetime, timedelta
+import os
+
+# Define default arguments for the DAG
+default_args = {
+    'start_date': datetime(2024, 1, 1),
+    'retries': 0,  # Set retries to 0 for continuous polling without retry delay
+}
+
+# Path to the file to monitor
+FILE_PATH = '/path/to/your/file.txt'
+PROCESSED_FLAG = '/path/to/processed_flag.txt'
+
+# Define a function to read and process the file
+def read_and_process_file(file_path):
+    # Check if the file has already been processed
+    if os.path.exists(PROCESSED_FLAG):
+        print(f"{file_path} has already been processed, skipping.")
+        return "File already processed"
+
+    # Process the file and create a flag to avoid reprocessing
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as file:
+            content = file.read()
+            # Add your processing logic here
+            print(f"Processing file content: {content}")
+
+        # Mark as processed by creating a flag file
+        with open(PROCESSED_FLAG, 'w') as flag:
+            flag.write("Processed")
+    else:
+        raise FileNotFoundError(f"{file_path} not found.")
+
+# DAG definition
+with DAG(
+    'continuous_file_polling_workflow',
+    default_args=default_args,
+    schedule_interval='@daily',  # Run daily; adjust as needed for more frequent polling
+    catchup=False  # Disable catchup to avoid backfilling
+) as dag:
+
+    # Task 1: Poll for the file location to check if it exists
+    file_sensor_task = FileSensor(
+        task_id='wait_for_file',
+        filepath=FILE_PATH,
+        poke_interval=30,  # Poll every 30 seconds
+        timeout=600,       # Timeout after 10 minutes
+        mode='poke'
+    )
+
+    # Task 2: Process the file content once it's available
+    process_file_task = PythonOperator(
+        task_id='process_file',
+        python_callable=read_and_process_file,
+        op_kwargs={'file_path': FILE_PATH}
+    )
+
+    # Task 3: Optional further processing task
+    def task3_processing():
+        print("Task 3 running after file processing.")
+
+    task3 = PythonOperator(
+        task_id='task3',
+        python_callable=task3_processing
+    )
+
+    # Set task dependencies
+    file_sensor_task >> process_file_task >> task3
