@@ -1,0 +1,20 @@
+{
+  "type" : "record",
+  "name" : "topLevelRecord",
+  "fields" : [ {
+    "name" : "EmpId",
+    "type" : [ "string", "null" ]
+  }, {
+    "name" : "FirstName",
+    "type" : [ "string", "null" ]
+  }, {
+    "name" : "MiddleName",
+    "type" : [ "string", "null" ]
+  }, {
+    "name" : "LastName",
+    "type" : [ "string", "null" ]
+  }, {
+    "name" : "DeptId",
+    "type" : [ "string", "null" ]
+  } ]
+}

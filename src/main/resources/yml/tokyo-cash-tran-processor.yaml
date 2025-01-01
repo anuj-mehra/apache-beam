@@ -18,6 +18,11 @@ job_metadata:
       dataframeName: mergedDf
       sqlQuery: select * from df1
 
+    - domain: custom-code
+      dataframesInvolved: iactual-java-class
+      dataframeName: mergedDf
+      sqlQuery: select * from df1
+
     - domain: load
       dataframeName: mergedDf
       destinationFileName: tokyo-cash-tran-output.txt

@@ -1,0 +1,11 @@
+{
+  "type" : "record",
+  "name" : "topLevelRecord",
+  "fields" : [ {
+    "name" : "DeptId",
+    "type" : [ "string", "null" ]
+  }, {
+    "name" : "DeptName",
+    "type" : [ "string", "null" ]
+  } ]
+}
