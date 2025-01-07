@@ -32,7 +32,7 @@ public class CountOfRowInPCollection {
         final PCollection<Long> count = firstAvro.apply(Count.globally());
 
         // Convert PCollection<Long> to PCollection<String>
-        PCollection<String> countAsString = count.apply("ConvertCountToString",
+        final PCollection<String> countAsString = count.apply("ConvertCountToString",
                 MapElements.into(TypeDescriptors.strings())
                         .via(Object::toString));
 
@@ -59,7 +59,7 @@ public class CountOfRowInPCollection {
          */
 
         // Read the result from the file into memory
-        List<String> fileContents = Files.lines(Paths.get("/Users/anujmehra/git/apache-beam/src/main/resources/lineage/output/count.txt"))
+        final List<String> fileContents = Files.lines(Paths.get("/Users/anujmehra/git/apache-beam/src/main/resources/lineage/output/count.txt"))
                 .collect(Collectors.toList());
 
         // Print the result
