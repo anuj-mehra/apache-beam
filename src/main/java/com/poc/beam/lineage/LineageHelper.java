@@ -13,7 +13,7 @@ public class LineageHelper {
     public static List<String> extractColumnNames(PCollection<GenericRecord> input){
 
         // Extract the first row using Sample.any(1)
-        PCollection<GenericRecord> firstRow = input.apply("GetFirstRow", Sample.any(1));
+        final PCollection<GenericRecord> firstRow = input.apply("GetFirstRow", Sample.any(1));
 
         // Log the first row (for demonstration purposes)
         firstRow.apply("LogFirstRow", ParDo.of(new DoFn<GenericRecord, Void>() {

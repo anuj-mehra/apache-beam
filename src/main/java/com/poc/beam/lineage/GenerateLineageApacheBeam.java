@@ -3,14 +3,21 @@ package com.poc.beam.lineage;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.extensions.avro.io.AvroIO;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.PCollection;
-
+import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.transforms.Create;
+import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.View;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PCollectionView;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 public class GenerateLineageApacheBeam {
-
 
     public static void main(String[] args) throws Exception{
 
