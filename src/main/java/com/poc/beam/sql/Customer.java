@@ -16,4 +16,13 @@ public class Customer {
         this.name = name;
         this.email = email;
     }
+
+    @Override
+    public String toString(){
+        return "Customer{" +
+                "customerId='" + customerId + '\'' +
+                ", name='" + name + '\'' +
+                ", email='" + email + '\'' +
+                '}';
+    }
 }

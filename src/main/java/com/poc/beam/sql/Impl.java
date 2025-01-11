@@ -3,6 +3,7 @@ package com.poc.beam.sql;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.extensions.sql.SqlTransform;
 import org.apache.beam.sdk.transforms.Create;
+import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.Row;
@@ -40,6 +41,17 @@ public class Impl {
                 SqlTransform.query("SELECT customerId, name , email FROM PCOLLECTION WHERE customerId = 'C1'")
         );
 
+        //Convert back to PCollection<Customer>
+        PCollection<Customer> customerRowsConverted = PCollectionTypeTransformer.convertFromRow(filteredCustomers, Customer.class);
+
+        customerRowsConverted.apply("Print Customers", org.apache.beam.sdk.transforms.ParDo.of(new DoFn<Customer, Void>() {
+            @ProcessElement
+            public void processElement(@Element Customer customer) {
+                // Print the customer object to the console
+                System.out.println(customer);
+            }
+        }));
+
         // Perform a SQL JOIN
         PCollection<Row> joinedRows = PCollectionTuple.of("Customers", customerRows)
                 .and("Positions", positionRows)
@@ -58,12 +70,10 @@ public class Impl {
                         )
                 );
 
-
         filteredCustomers.apply("Print filtered customer Rows", org.apache.beam.sdk.transforms.ParDo.of(new PrintRowFn()));
 
         // Print the results
         joinedRows.apply("Print Results", org.apache.beam.sdk.transforms.ParDo.of(new PrintRowFn()));
-
 
         // Run the pipeline
         pipeline.run().waitUntilFinish();
