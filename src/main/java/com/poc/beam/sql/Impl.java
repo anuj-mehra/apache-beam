@@ -4,6 +4,7 @@ import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.extensions.sql.SqlTransform;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.Row;
 
 public class Impl {
@@ -39,7 +40,30 @@ public class Impl {
                 SqlTransform.query("SELECT customerId, name , email FROM PCOLLECTION WHERE customerId = 'C1'")
         );
 
+        // Perform a SQL JOIN
+        PCollection<Row> joinedRows = PCollectionTuple.of("Customers", customerRows)
+                .and("Positions", positionRows)
+                .apply("Join Customers and Positions",
+                        SqlTransform.query(
+                                "SELECT " +
+                                        "  c.customerId, " +
+                                        "  c.name, " +
+                                        "  c.email, " +
+                                        "  p.id, " +
+                                        "  p.symbol, " +
+                                        "  p.quantity " +
+                                        "FROM Customers c " +
+                                        "JOIN Positions p " +
+                                        "ON c.customerId = p.customerId"
+                        )
+                );
+
+
         filteredCustomers.apply("Print filtered customer Rows", org.apache.beam.sdk.transforms.ParDo.of(new PrintRowFn()));
+
+        // Print the results
+        joinedRows.apply("Print Results", org.apache.beam.sdk.transforms.ParDo.of(new PrintRowFn()));
+
 
         // Run the pipeline
         pipeline.run().waitUntilFinish();
