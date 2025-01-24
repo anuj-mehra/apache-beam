@@ -1,0 +1,59 @@
+import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.Schema;
+import org.apache.beam.sdk.transforms.DoFn;
+
+public class ExtractSchemaFn extends DoFn<GenericRecord, Schema> {
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+        GenericRecord record = c.element();
+        if (record != null) {
+            // Extract Avro schema from GenericRecord
+            c.output(record.getSchema());
+        }
+    }
+}
+
+
+
+import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.Schema;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.extensions.avro.schemas.SchemaTranslation;
+import org.apache.beam.sdk.schemas.Schema;
+import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.Sample;
+import org.apache.beam.sdk.values.PCollection;
+
+public class AttachSchemaExample {
+    public static void main(String[] args) {
+        Pipeline pipeline = Pipeline.create();
+
+        // Assume input PCollection<GenericRecord>
+        PCollection<GenericRecord> genericRecords = getGenericRecordPCollection(pipeline);
+
+        // Step 1: Extract Avro Schema from GenericRecord
+        PCollection<Schema> schemaCollection = genericRecords.apply("ExtractSchema", ParDo.of(new ExtractSchemaFn()));
+
+        // Step 2: Get the first schema (assuming all records have the same schema)
+        Schema avroSchema = schemaCollection.apply("GetFirst", Sample.any(1)).getSchema();
+
+        // Step 3: Convert Avro Schema to Beam Schema
+        Schema beamSchema = SchemaTranslation.avroSchemaToBeamSchema(avroSchema);
+
+        // Step 4: Attach Schema to PCollection
+        PCollection<GenericRecord> withSchema = genericRecords.setSchema(
+                beamSchema,
+                record -> SchemaTranslation.avroGenericRecordToBeamRow(record, beamSchema),
+                row -> SchemaTranslation.beamRowToAvroGenericRecord(row, avroSchema)
+        );
+
+        pipeline.run().waitUntilFinish();
+    }
+
+    private static PCollection<GenericRecord> getGenericRecordPCollection(Pipeline pipeline) {
+        // Implement logic to read GenericRecord PCollection (e.g., from Avro, Kafka, BigQuery)
+        return null;
+    }
+}
+
+
