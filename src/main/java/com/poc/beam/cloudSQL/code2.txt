@@ -1,0 +1,125 @@
+import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.io.jdbc.JdbcIO;
+import org.apache.beam.sdk.options.Default;
+import org.apache.beam.sdk.options.Description;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.transforms.GroupIntoBatches;
+import org.apache.beam.sdk.transforms.MapElements;
+import org.apache.beam.sdk.transforms.SimpleFunction;
+import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.apache.beam.sdk.values.TypeDescriptors;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.List;
+
+public class CloudSQLDataflowJob {
+
+    public interface CloudSQLPipelineOptions extends DataflowPipelineOptions {
+        @Description("Cloud SQL JDBC URL")
+        @Default.String("jdbc:postgresql://<CLOUD_SQL_IP>:5432/mydatabase")
+        String getJdbcUrl();
+        void setJdbcUrl(String value);
+
+        @Description("Cloud SQL username")
+        @Default.String("myuser")
+        String getJdbcUsername();
+        void setJdbcUsername(String value);
+
+        @Description("Cloud SQL password")
+        @Default.String("mypassword")
+        String getJdbcPassword();
+        void setJdbcPassword(String value);
+
+        @Description("Max number of workers")
+        @Default.Integer(2) // Reduce to 2 workers for limiting connections
+        Integer getMaxNumWorkers();
+        void setMaxNumWorkers(Integer value);
+    }
+
+    public static void main(String[] args) {
+        CloudSQLPipelineOptions options = PipelineOptionsFactory.fromArgs(args).withValidation()
+                .as(CloudSQLPipelineOptions.class);
+        options.setRunner(DataflowPipelineOptions.DirectRunner.class); // Change to DataflowRunner when deploying
+        options.setMaxNumWorkers(2);  // Limits parallelism
+
+        Pipeline pipeline = Pipeline.create(options);
+
+        // Read data from Cloud SQL
+        pipeline.apply("ReadFromCloudSQL", JdbcIO.<String>read()
+                .withDataSourceConfiguration(JdbcIO.DataSourceConfiguration.create(
+                        "org.postgresql.Driver", options.getJdbcUrl())
+                        .withUsername(options.getJdbcUsername())
+                        .withPassword(options.getJdbcPassword()))
+                .withQuery("SELECT name FROM users")
+                .withRowMapper((JdbcIO.RowMapper<String>) (ResultSet rs) -> rs.getString("name"))
+                .withOutputParallelization(false))  // Avoid splitting into multiple partitions
+
+                // Reduce the number of partitions
+                .apply("Assign Single Key", MapElements.into(
+                        TypeDescriptors.kvs(TypeDescriptors.strings(), TypeDescriptors.strings()))
+                        .via(name -> KV.of("SINGLE_KEY", name)))
+
+                // Group into batches of 100 to ensure only one connection per executor
+                .apply("Batch Records", GroupIntoBatches.ofSize(100))
+
+                // Convert batches back to list of names
+                .apply("Extract Values", MapElements.into(TypeDescriptors.lists(TypeDescriptors.strings()))
+                        .via(KV::getValue))
+
+                // Write data back to Cloud SQL with batch insert
+                .apply("WriteToCloudSQL", JdbcIO.<List<String>>write()
+                        .withDataSourceConfiguration(JdbcIO.DataSourceConfiguration.create(
+                                "org.postgresql.Driver", options.getJdbcUrl())
+                                .withUsername(options.getJdbcUsername())
+                                .withPassword(options.getJdbcPassword()))
+                        .withStatement("INSERT INTO processed_users (name) VALUES (?)")
+                        .withBatchSize(100)  // Batching 100 records per insert
+                        .withPreparedStatementSetter((JdbcIO.PreparedStatementSetter<List<String>>) (List<String> names, PreparedStatement ps) -> {
+                            for (String name : names) {
+                                ps.setString(1, name);
+                                ps.addBatch();
+                            }
+                        })
+                );
+
+        pipeline.run().waitUntilFinish();
+    }
+}
+
+
+
+
+To ensure that only one connection is opened per executor and to reduce the number of partitions of the PCollection, follow these optimizations:
+1. Control the Number of Partitions
+* Use Reshuffle or GroupIntoBatches to control parallelism.
+* Use withOutputParallelization(false) on JdbcIO.read() to ensure single partitioning.
+2. Open Only One Connection Per Executor
+* Use Singleton Database Connection inside JdbcIO.write().
+* Configure maxNumWorkers in Dataflow to control parallelism at the worker level.
+
+
+
+Expected Results
+1. Only 2 connections to Cloud SQL (since maxNumWorkers=2).
+2. Each connection processes multiple batches of 100 records.
+3. Lower CPU & memory usage due to reduced partitions.
+4. Higher throughput with GroupIntoBatches.
+
+
+
+
+🔹 Key Optimizations Applied
+✅ Limit Connections to One per Executor
+* GroupIntoBatches.ofSize(100) ensures each executor processes only one batch at a time.
+* Workers open only one connection per batch, reducing overhead.
+✅ Reduce Number of Partitions in PCollection
+* withOutputParallelization(false) in JdbcIO.read() prevents excessive parallel splits.
+* Assign a single key (SINGLE_KEY) to force only a few partitions.
+✅ Limit Number of Workers
+* Set maxNumWorkers=2 in Dataflow to keep only 2 executors, ensuring controlled parallelism.
+
+
+

@@ -89,6 +89,7 @@ public class CloudSQLDataflowJob {
                                 .withUsername(options.getJdbcUsername())
                                 .withPassword(options.getJdbcPassword()))
                         .withStatement("INSERT INTO processed_users (name) VALUES (?)")
+                         .withBatchSize(100)  // Batching 100 records per insert
                         .withPreparedStatementSetter((JdbcIO.PreparedStatementSetter<String>) (String name, PreparedStatement ps) -> ps.setString(1, name))
                 );
 
