@@ -1,0 +1,100 @@
+<dependencies>
+    <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-core</artifactId>
+        <version>2.50.0</version>
+    </dependency>
+    <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-runners-google-cloud-dataflow-java</artifactId>
+        <version>2.50.0</version>
+    </dependency>
+    <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-io-jdbc</artifactId>
+        <version>2.50.0</version>
+    </dependency>
+    <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <version>42.3.8</version>
+    </dependency>
+    <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+        <version>8.0.33</version>
+    </dependency>
+</dependencies>
+
+
+
+
+
+import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.io.jdbc.JdbcIO;
+import org.apache.beam.sdk.options.Default;
+import org.apache.beam.sdk.options.Description;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.transforms.MapElements;
+import org.apache.beam.sdk.transforms.SimpleFunction;
+import org.apache.beam.sdk.values.TypeDescriptor;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+
+public class CloudSQLDataflowJob {
+
+    public interface CloudSQLPipelineOptions extends DataflowPipelineOptions {
+        @Description("Cloud SQL JDBC URL")
+        @Default.String("jdbc:postgresql://<CLOUD_SQL_IP>:5432/mydatabase")
+        String getJdbcUrl();
+        void setJdbcUrl(String value);
+
+        @Description("Cloud SQL username")
+        @Default.String("myuser")
+        String getJdbcUsername();
+        void setJdbcUsername(String value);
+
+        @Description("Cloud SQL password")
+        @Default.String("mypassword")
+        String getJdbcPassword();
+        void setJdbcPassword(String value);
+    }
+
+    public static void main(String[] args) {
+        CloudSQLPipelineOptions options = PipelineOptionsFactory.fromArgs(args).withValidation()
+                .as(CloudSQLPipelineOptions.class);
+        options.setRunner(DataflowPipelineOptions.DirectRunner.class); // Change to DataflowRunner when deploying
+
+        Pipeline pipeline = Pipeline.create(options);
+
+        // Read data from Cloud SQL
+        pipeline.apply("ReadFromCloudSQL", JdbcIO.<String>read()
+                .withDataSourceConfiguration(JdbcIO.DataSourceConfiguration.create(
+                        "org.postgresql.Driver", options.getJdbcUrl())
+                        .withUsername(options.getJdbcUsername())
+                        .withPassword(options.getJdbcPassword()))
+                .withQuery("SELECT name FROM users")
+                .withRowMapper((JdbcIO.RowMapper<String>) (ResultSet rs) -> rs.getString("name"))
+                .withOutputParallelization(false))
+
+                .apply("ProcessData", MapElements.into(TypeDescriptor.of(String.class))
+                        .via((String name) -> "Processed: " + name))
+
+                // Write data back to Cloud SQL
+                .apply("WriteToCloudSQL", JdbcIO.<String>write()
+                        .withDataSourceConfiguration(JdbcIO.DataSourceConfiguration.create(
+                                "org.postgresql.Driver", options.getJdbcUrl())
+                                .withUsername(options.getJdbcUsername())
+                                .withPassword(options.getJdbcPassword()))
+                        .withStatement("INSERT INTO processed_users (name) VALUES (?)")
+                        .withPreparedStatementSetter((JdbcIO.PreparedStatementSetter<String>) (String name, PreparedStatement ps) -> ps.setString(1, name))
+                );
+
+        pipeline.run().waitUntilFinish();
+    }
+}
+
+
+
