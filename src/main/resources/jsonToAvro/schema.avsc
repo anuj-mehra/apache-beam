@@ -1,0 +1,22 @@
+{
+  "type": "record",
+  "name": "topLevelRecord",
+  "fields": [
+    {
+    "name": "id",
+    "type": ["int", "null"]
+    },
+    {
+    "name": "name",
+    "type": ["string", "null"]
+    },
+    {
+    "name": "email",
+    "type": ["string", "null"]
+    },
+    {
+    "name": "age",
+    "type": ["int", "null"]
+    }
+  ]
+}
