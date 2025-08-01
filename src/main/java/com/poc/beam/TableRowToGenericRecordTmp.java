@@ -3,58 +3,143 @@ package com.poc.beam;
 public class TableRowToGenericRecordTmp {
 
     /*
-    Object colJsonStr = row.get("colJson");
+    import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
 
-if (colJsonStr != null) {
-    Map<String, Object> jsonMap = mapper.readValue(colJsonStr.toString(), new TypeReference<Map<String, Object>>() {});
-    Schema jsonSchema = schema.getField("colJson").schema().getTypes().get(1); // [null, record]
-    GenericRecord jsonRecord = new GenericData.Record(jsonSchema);
+import java.util.*;
 
-    for (Schema.Field field : jsonSchema.getFields()) {
-        Object value = jsonMap.get(field.name());
+public class AvroNestedArrayHandler {
 
-        Schema fieldSchema = field.schema();
-        Schema.Type fieldType = fieldSchema.getType();
+    public static void main(String[] args) throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
 
-        // If union (e.g., [null, array] or [null, record])
-        if (fieldType == Schema.Type.UNION) {
-            List<Schema> types = fieldSchema.getTypes();
-            // Skip null type
-            fieldSchema = types.stream().filter(s -> s.getType() != Schema.Type.NULL).findFirst().orElse(null);
-            fieldType = fieldSchema.getType();
-        }
+        // Example JSON string for colJson (simulate row.get("colJson").toString())
+        String jsonStr = """
+            {
+                "fieldNameForListT": [
+                    {
+                        "name": "item1",
+                        "e": {
+                            "id": "e1",
+                            "code": "USD"
+                        }
+                    },
+                    {
+                        "name": "item2",
+                        "e": {
+                            "id": "e2",
+                            "code": "EUR"
+                        }
+                    }
+                ]
+            }
+            """;
 
-        if (fieldType == Schema.Type.ARRAY) {
-            // Handle List<CurrencyCode> (array of records)
-            List<Map<String, Object>> list = (List<Map<String, Object>>) value;
-            List<GenericRecord> recordList = new ArrayList<>();
-            Schema elementType = fieldSchema.getElementType();
-
-            for (Map<String, Object> item : list) {
-                GenericRecord nestedRecord = new GenericData.Record(elementType);
-                for (Schema.Field nestedField : elementType.getFields()) {
-                    nestedRecord.put(nestedField.name(), item.get(nestedField.name()));
+        // Simulate reading Avro schema from .avsc file
+        Schema.Parser parser = new Schema.Parser();
+        Schema schema = parser.parse("""
+            {
+              "type": "record",
+              "name": "Parent",
+              "fields": [
+                {
+                  "name": "colJson",
+                  "type": ["null", {
+                    "type": "record",
+                    "name": "ColJsonRecord",
+                    "fields": [
+                      {
+                        "name": "fieldNameForListT",
+                        "type": ["null", {
+                          "type": "array",
+                          "items": {
+                            "type": "record",
+                            "name": "T",
+                            "fields": [
+                              { "name": "name", "type": "string" },
+                              {
+                                "name": "e",
+                                "type": {
+                                  "type": "record",
+                                  "name": "E",
+                                  "fields": [
+                                    { "name": "id", "type": "string" },
+                                    { "name": "code", "type": "string" }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }]
+                      }
+                    ]
+                  }]
                 }
-                recordList.add(nestedRecord);
+              ]
             }
-            jsonRecord.put(field.name(), recordList);
+        """);
 
-        } else if (fieldType == Schema.Type.RECORD) {
-            // Handle nested object
-            Map<String, Object> nestedMap = (Map<String, Object>) value;
-            GenericRecord nestedRecord = new GenericData.Record(fieldSchema);
-            for (Schema.Field nestedField : fieldSchema.getFields()) {
-                nestedRecord.put(nestedField.name(), nestedMap.get(nestedField.name()));
+        // Parse JSON string to Map
+        Map<String, Object> jsonMap = mapper.readValue(jsonStr, new TypeReference<>() {});
+
+        // Build parent record
+        GenericRecord parentRecord = new GenericData.Record(schema);
+        Schema colJsonSchema = schema.getField("colJson").schema().getTypes().get(1); // [null, record]
+        GenericRecord colJsonRecord = new GenericData.Record(colJsonSchema);
+
+        for (Schema.Field field : colJsonSchema.getFields()) {
+            Object value = jsonMap.get(field.name());
+            Schema fieldSchema = field.schema();
+            Schema.Type fieldType = fieldSchema.getType();
+
+            // Handle unions like [null, array]
+            if (fieldType == Schema.Type.UNION) {
+                fieldSchema = fieldSchema.getTypes().stream()
+                        .filter(s -> s.getType() != Schema.Type.NULL)
+                        .findFirst().orElse(null);
+                fieldType = fieldSchema.getType();
             }
-            jsonRecord.put(field.name(), nestedRecord);
 
-        } else {
-            // Simple field
-            jsonRecord.put(field.name(), value);
+            if (fieldType == Schema.Type.ARRAY) {
+                List<Map<String, Object>> listT = (List<Map<String, Object>>) value;
+                List<GenericRecord> tRecords = new ArrayList<>();
+                Schema tSchema = fieldSchema.getElementType();
+                Schema eSchema = tSchema.getField("e").schema();
+
+                // Handle union inside T.e if needed
+                if (eSchema.getType() == Schema.Type.UNION) {
+                    eSchema = eSchema.getTypes().stream()
+                            .filter(s -> s.getType() == Schema.Type.RECORD)
+                            .findFirst().orElseThrow();
+                }
+
+                for (Map<String, Object> tMap : listT) {
+                    GenericRecord tRecord = new GenericData.Record(tSchema);
+                    tRecord.put("name", tMap.get("name"));
+
+                    Map<String, Object> eMap = (Map<String, Object>) tMap.get("e");
+                    GenericRecord eRecord = new GenericData.Record(eSchema);
+                    for (Schema.Field ef : eSchema.getFields()) {
+                        eRecord.put(ef.name(), eMap.get(ef.name()));
+                    }
+                    tRecord.put("e", eRecord);
+                    tRecords.add(tRecord);
+                }
+
+                colJsonRecord.put(field.name(), tRecords);
+            } else {
+                colJsonRecord.put(field.name(), value); // simple field
+            }
         }
-    }
 
-    record.put("colJson", jsonRecord);
+        parentRecord.put("colJson", colJsonRecord);
+
+        // ✅ Done - print final record
+        System.out.println(parentRecord);
+    }
 }
 
      */
