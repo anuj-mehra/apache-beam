@@ -1,0 +1,338 @@
+package your.pkg;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.io.AvroIO;
+import org.apache.beam.sdk.io.TextIO;
+import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
+import org.apache.beam.sdk.transforms.*;
+import org.apache.beam.sdk.transforms.Wait;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.TypeDescriptor;
+import org.apache.beam.sdk.values.TypeDescriptors;
+import org.apache.beam.sdk.io.FileBasedSink;
+import org.apache.beam.sdk.io.WriteFilesResult;
+import org.apache.beam.sdk.values.KV;
+
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.sql.*;
+import java.time.Duration;
+import java.util.Collections;
+
+/** End-to-end pipeline with enforced sequential stages using Wait.on signals. */
+public class JsonToAvro_CloudSQL_PubSub_HTTP_Sequential {
+
+  // ---------- POJOs for metadata ----------
+  public static class Meta1 {
+    String id;
+    String fileType;
+    Double amount;
+    Meta1(String id, String fileType, Double amount) {
+      this.id = id; this.fileType = fileType; this.amount = amount;
+    }
+  }
+
+  public static class Meta2 {
+    String id;
+    String owner;
+    Long recordCount;
+    Meta2(String id, String owner, Long recordCount) {
+      this.id = id; this.owner = owner; this.recordCount = recordCount;
+    }
+  }
+
+  // ---------- DoFns ----------
+  /** Parse a JSON line into a GenericRecord using the provided Avro schema. */
+  static class JsonToGenericRecordFn extends DoFn<String, GenericRecord> {
+    private final String schemaStr;
+    private transient Schema schema;
+
+    JsonToGenericRecordFn(String schemaStr) { this.schemaStr = schemaStr; }
+
+    @Setup
+    public void setup() {
+      schema = new Schema.Parser().parse(schemaStr);
+    }
+
+    @ProcessElement
+    public void process(@Element String jsonLine, OutputReceiver<GenericRecord> out) {
+      try {
+        JsonObject obj = JsonParser.parseString(jsonLine).getAsJsonObject();
+        GenericRecord rec = new GenericData.Record(schema);
+        // Map JSON fields → Avro fields (edit to match your schema)
+        if (obj.has("id")) rec.put("id", obj.get("id").getAsString());
+        if (obj.has("fileType")) rec.put("fileType", obj.get("fileType").getAsString());
+        if (obj.has("amount")) rec.put("amount", obj.get("amount").getAsDouble());
+        if (obj.has("owner")) rec.put("owner", obj.get("owner").getAsString());
+        if (obj.has("recordCount")) rec.put("recordCount", obj.get("recordCount").getAsLong());
+        // Add other fields as needed…
+        out.output(rec);
+      } catch (Exception e) {
+        // log and skip bad lines
+        System.err.println("Bad JSON: " + jsonLine + " err=" + e.getMessage());
+      }
+    }
+  }
+
+  /** Extract metadata1 from GenericRecord. */
+  static class ExtractMeta1Fn extends DoFn<GenericRecord, Meta1> {
+    @ProcessElement
+    public void process(@Element GenericRecord rec, OutputReceiver<Meta1> out) {
+      String id = (String) rec.get("id");
+      String fileType = (String) rec.get("fileType");
+      Double amount = rec.get("amount") == null ? null : ((Number) rec.get("amount")).doubleValue();
+      out.output(new Meta1(id, fileType, amount));
+    }
+  }
+
+  /** Extract metadata2 from GenericRecord. */
+  static class ExtractMeta2Fn extends DoFn<GenericRecord, Meta2> {
+    @ProcessElement
+    public void process(@Element GenericRecord rec, OutputReceiver<Meta2> out) {
+      String id = (String) rec.get("id");
+      String owner = (String) rec.get("owner");
+      Long recordCount = rec.get("recordCount") == null ? null : ((Number) rec.get("recordCount")).longValue();
+      out.output(new Meta2(id, owner, recordCount));
+    }
+  }
+
+  /** Write Meta1 rows to Cloud SQL using JDBC; emit a small "done" signal per row. */
+  static class WriteMeta1CloudSqlFn extends DoFn<Meta1, String> {
+    private final String jdbcUrl, user, pass;
+    private final String insertSql;
+
+    private transient Connection conn;
+    private transient PreparedStatement ps;
+
+    WriteMeta1CloudSqlFn(String jdbcUrl, String user, String pass, String insertSql) {
+      this.jdbcUrl = jdbcUrl; this.user = user; this.pass = pass; this.insertSql = insertSql;
+    }
+
+    @Setup
+    public void setup() throws Exception {
+      // Ensure JDBC driver on classpath (e.g., MySQL or Postgres)
+      conn = DriverManager.getConnection(jdbcUrl, user, pass);
+      conn.setAutoCommit(true);
+      ps = conn.prepareStatement(insertSql);
+    }
+
+    @Teardown
+    public void teardown() throws Exception {
+      if (ps != null) ps.close();
+      if (conn != null) conn.close();
+    }
+
+    @ProcessElement
+    public void process(@Element Meta1 m, OutputReceiver<String> out) {
+      try {
+        // Example SQL: INSERT INTO table1(id, file_type, amount) VALUES (?, ?, ?)
+        ps.setString(1, m.id);
+        ps.setString(2, m.fileType);
+        if (m.amount == null) ps.setNull(3, Types.DOUBLE); else ps.setDouble(3, m.amount);
+        ps.executeUpdate();
+        out.output("db1_done"); // signal for next stage
+      } catch (SQLException e) {
+        throw new RuntimeException("DB1 insert failed for id=" + m.id, e);
+      }
+    }
+  }
+
+  /** Write Meta2 rows to Cloud SQL using JDBC; emit a small "done" signal per row. */
+  static class WriteMeta2CloudSqlFn extends DoFn<Meta2, String> {
+    private final String jdbcUrl, user, pass;
+    private final String insertSql;
+
+    private transient Connection conn;
+    private transient PreparedStatement ps;
+
+    WriteMeta2CloudSqlFn(String jdbcUrl, String user, String pass, String insertSql) {
+      this.jdbcUrl = jdbcUrl; this.user = user; this.pass = pass; this.insertSql = insertSql;
+    }
+
+    @Setup
+    public void setup() throws Exception {
+      conn = DriverManager.getConnection(jdbcUrl, user, pass);
+      conn.setAutoCommit(true);
+      ps = conn.prepareStatement(insertSql);
+    }
+
+    @Teardown
+    public void teardown() throws Exception {
+      if (ps != null) ps.close();
+      if (conn != null) conn.close();
+    }
+
+    @ProcessElement
+    public void process(@Element Meta2 m, OutputReceiver<String> out) {
+      try {
+        // Example SQL: INSERT INTO table2(id, owner, record_count) VALUES (?, ?, ?)
+        ps.setString(1, m.id);
+        ps.setString(2, m.owner);
+        if (m.recordCount == null) ps.setNull(3, Types.BIGINT); else ps.setLong(3, m.recordCount);
+        ps.executeUpdate();
+        out.output("db2_done"); // signal
+      } catch (SQLException e) {
+        throw new RuntimeException("DB2 insert failed for id=" + m.id, e);
+      }
+    }
+  }
+
+  /** Publish to Pub/Sub then emit a "done" signal. */
+  static class PublishPubSubFn extends DoFn<String, String> {
+    // For simplicity, using HTTP-style publish in DoFn; in prod prefer PubsubIO if you don't need the signal.
+    private final String projectId;
+    private final String topicId;
+
+    PublishPubSubFn(String projectId, String topicId) {
+      this.projectId = projectId; this.topicId = topicId;
+    }
+
+    @ProcessElement
+    public void process(@Element String ignored, OutputReceiver<String> out) {
+      try {
+        // If you prefer PubsubIO, move to PubsubIO.writeStrings() but you'll lose a direct signal.
+        // Here we just simulate publishing; replace with client library if desired.
+        System.out.println("Publishing to pubsub: " + projectId + "/" + topicId);
+        // ... call client publish ...
+        out.output("pubsub_done");
+      } catch (Exception e) {
+        throw new RuntimeException("Pub/Sub publish failed", e);
+      }
+    }
+  }
+
+  /** Send an HTTP notification (POST) after Pub/Sub; terminal stage. */
+  static class HttpNotifyFn extends DoFn<String, String> {
+    private final String endpoint;
+
+    HttpNotifyFn(String endpoint) { this.endpoint = endpoint; }
+
+    @ProcessElement
+    public void process(@Element String ignored, OutputReceiver<String> out) {
+      HttpURLConnection conn = null;
+      try {
+        URL url = new URL(endpoint);
+        conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setConnectTimeout(10000);
+        conn.setReadTimeout(20000);
+        conn.setDoOutput(true);
+        byte[] body = "{\"status\":\"ok\"}".getBytes();
+        conn.getOutputStream().write(body);
+        int code = conn.getResponseCode();
+        if (code / 100 != 2) {
+          throw new IOException("HTTP notify non-2xx: " + code);
+        }
+        out.output("http_done");
+      } catch (Exception e) {
+        throw new RuntimeException("HTTP notify failed", e);
+      } finally {
+        if (conn != null) conn.disconnect();
+      }
+    }
+  }
+
+  public static void main(String[] args) throws Exception {
+    Pipeline p = Pipeline.create();
+
+    // --------- CONFIG (replace placeholders) ---------
+    String inputJsonGlob = "gs://YOUR_BUCKET/input/*.json";
+    String avroOutputPrefix = "gs://YOUR_BUCKET/output/records/records"; // Beam will shard + suffix
+    String avroSuffix = ".avro";
+    int avroShards = 4;
+
+    // Load Avro schema from local resource or string (you can load from file or embed)
+    String schemaJson =
+        "{\n" +
+        "  \"type\": \"record\",\n" +
+        "  \"name\": \"Record\",\n" +
+        "  \"fields\": [\n" +
+        "    {\"name\":\"id\",\"type\":\"string\"},\n" +
+        "    {\"name\":\"fileType\",\"type\":[\"null\",\"string\"],\"default\":null},\n" +
+        "    {\"name\":\"amount\",\"type\":[\"null\",\"double\"],\"default\":null},\n" +
+        "    {\"name\":\"owner\",\"type\":[\"null\",\"string\"],\"default\":null},\n" +
+        "    {\"name\":\"recordCount\",\"type\":[\"null\",\"long\"],\"default\":null}\n" +
+        "  ]\n" +
+        "}";
+
+    // Cloud SQL config (example: MySQL)
+    String jdbcUrl = "jdbc:mysql:///<DB_NAME>?cloudSqlInstance=<PROJECT:REGION:INSTANCE>&"
+        + "socketFactory=com.google.cloud.sql.mysql.SocketFactory&user=<USER>&password=<PASS>";
+    String dbUser = "<USER>";
+    String dbPass = "<PASS>";
+    String insert1 = "INSERT INTO table1(id, file_type, amount) VALUES(?,?,?)";
+    String insert2 = "INSERT INTO table2(id, owner, record_count) VALUES(?,?,?)";
+
+    // Pub/Sub + HTTP
+    String pubsubProject = "<PROJECT_ID>";
+    String pubsubTopic = "<TOPIC_NAME>";
+    String httpEndpoint = "https://example.com/notify";
+
+    // --------- PIPELINE ---------
+
+    // Stage 0: Read JSON lines
+    PCollection<String> jsonLines =
+        p.apply("ReadJSON", TextIO.read().from(inputJsonGlob));
+
+    // Stage A: JSON -> GenericRecord -> Avro write
+    Schema avroSchema = new Schema.Parser().parse(schemaJson);
+    PCollection<GenericRecord> records =
+        jsonLines.apply("JsonToAvroRecord", ParDo.of(new JsonToGenericRecordFn(schemaJson)));
+
+    WriteFilesResult<Void> avroWriteResult =
+        records.apply("WriteAvro",
+            AvroIO.writeGenericRecords(avroSchema)
+                .to(avroOutputPrefix)
+                .withSuffix(avroSuffix)
+                .withShardNameTemplate(FileBasedSink.TemplateShardName.PER_SHARD_TEMPLATE)
+                .withNumShards(avroShards));
+
+    // Create a tiny signal from Avro write completion
+    PCollection<String> avroDoneSignal =
+        avroWriteResult
+            .getPerDestinationOutputFilenames()           // PCollection<KV<Void,String>>
+            .apply("AvroValues", Values.create())          // PCollection<String>
+            .apply("AvroDoneMarker",
+                MapElements.into(TypeDescriptors.strings()).via(f -> "avro_done"));
+
+    // Stage B: metadata1 → CloudSQL (sequentially after Avro)
+    PCollection<Meta1> meta1 =
+        records.apply("ExtractMeta1", ParDo.of(new ExtractMeta1Fn()))
+               .apply("WaitForAvro_B", Wait.on(avroDoneSignal));
+
+    PCollection<String> db1DoneSignal =
+        meta1.apply("WriteDB1",
+            ParDo.of(new WriteMeta1CloudSqlFn(jdbcUrl, dbUser, dbPass, insert1)));
+
+    // Stage C: metadata2 → CloudSQL (after DB1)
+    PCollection<Meta2> meta2 =
+        records.apply("ExtractMeta2", ParDo.of(new ExtractMeta2Fn()))
+               .apply("WaitForDB1_C", Wait.on(db1DoneSignal));
+
+    PCollection<String> db2DoneSignal =
+        meta2.apply("WriteDB2",
+            ParDo.of(new WriteMeta2CloudSqlFn(jdbcUrl, dbUser, dbPass, insert2)));
+
+    // Stage D: Pub/Sub publish (after DB2)
+    PCollection<String> pubsubDoneSignal =
+        db2DoneSignal
+            .apply("WaitForDB2_D", Wait.on(db2DoneSignal))
+            // We only need a single element to trigger a single publish; sample with Sample.any(1)
+            .apply("AnyElementForPubSub", Sample.any(1))
+            .apply("PubSubPublish", ParDo.of(new PublishPubSubFn(pubsubProject, pubsubTopic)));
+
+    // Stage E: HTTP notify (after Pub/Sub)
+    db2DoneSignal
+        .apply("WaitForPubSub_E", Wait.on(pubsubDoneSignal))
+        .apply("AnyElementForHTTP", Sample.any(1))
+        .apply("HttpNotify", ParDo.of(new HttpNotifyFn(httpEndpoint)));
+
+    p.run().waitUntilFinish();
+  }
+}
